@@ -5287,6 +5287,8 @@ pub async fn start_channels(config: Config) -> Result<()> {
         custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
         max_tokens_override: None,
         model_support_vision: config.model_support_vision,
+        tls_ca_cert_path: config.effective_provider_tls_ca_cert_path(),
+        tls_insecure: config.effective_provider_tls_insecure(),
     };
     let provider: Arc<dyn Provider> = Arc::from(
         create_resilient_provider_nonblocking(

@@ -392,6 +392,8 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
             custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
             max_tokens_override: None,
             model_support_vision: config.model_support_vision,
+            tls_ca_cert_path: config.effective_provider_tls_ca_cert_path(),
+            tls_insecure: config.effective_provider_tls_insecure(),
         },
     )?);
     let model = config

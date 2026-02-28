@@ -51,6 +51,10 @@ pub struct OpenAiCompatibleProvider {
     api_mode: CompatibleApiMode,
     /// Optional max token cap propagated to outbound requests.
     max_tokens_override: Option<u32>,
+    /// Path to a custom CA certificate file (PEM format).
+    tls_ca_cert_path: Option<String>,
+    /// If true, disable TLS certificate verification (insecure).
+    tls_insecure: bool,
 }
 
 /// How the provider expects the API key to be sent.
@@ -91,6 +95,8 @@ impl OpenAiCompatibleProvider {
             false,
             CompatibleApiMode::OpenAiChatCompletions,
             None,
+            None,
+            false,
         )
     }
 
@@ -112,6 +118,8 @@ impl OpenAiCompatibleProvider {
             false,
             CompatibleApiMode::OpenAiChatCompletions,
             None,
+            None,
+            false,
         )
     }
 
@@ -134,6 +142,8 @@ impl OpenAiCompatibleProvider {
             false,
             CompatibleApiMode::OpenAiChatCompletions,
             None,
+            None,
+            false,
         )
     }
 
@@ -159,6 +169,8 @@ impl OpenAiCompatibleProvider {
             false,
             CompatibleApiMode::OpenAiChatCompletions,
             None,
+            None,
+            false,
         )
     }
 
@@ -181,6 +193,8 @@ impl OpenAiCompatibleProvider {
             false,
             CompatibleApiMode::OpenAiChatCompletions,
             None,
+            None,
+            false,
         )
     }
 
@@ -203,6 +217,8 @@ impl OpenAiCompatibleProvider {
             true,
             CompatibleApiMode::OpenAiChatCompletions,
             None,
+            None,
+            false,
         )
     }
 
@@ -215,6 +231,8 @@ impl OpenAiCompatibleProvider {
         supports_vision: bool,
         api_mode: CompatibleApiMode,
         max_tokens_override: Option<u32>,
+        tls_ca_cert_path: Option<&str>,
+        tls_insecure: bool,
     ) -> Self {
         Self::new_with_options(
             name,
@@ -227,6 +245,8 @@ impl OpenAiCompatibleProvider {
             false,
             api_mode,
             max_tokens_override,
+            tls_ca_cert_path,
+            tls_insecure,
         )
     }
 
@@ -241,6 +261,8 @@ impl OpenAiCompatibleProvider {
         merge_system_into_user: bool,
         api_mode: CompatibleApiMode,
         max_tokens_override: Option<u32>,
+        tls_ca_cert_path: Option<&str>,
+        tls_insecure: bool,
     ) -> Self {
         Self {
             name: name.to_string(),
@@ -254,6 +276,8 @@ impl OpenAiCompatibleProvider {
             native_tool_calling: !merge_system_into_user,
             api_mode,
             max_tokens_override: max_tokens_override.filter(|value| *value > 0),
+            tls_ca_cert_path: tls_ca_cert_path.map(ToString::to_string),
+            tls_insecure,
         }
     }
 
@@ -289,21 +313,57 @@ impl OpenAiCompatibleProvider {
     }
 
     fn http_client(&self) -> Client {
-        if let Some(ua) = self.user_agent.as_deref() {
+        if self.user_agent.is_some() || self.tls_ca_cert_path.is_some() || self.tls_insecure {
             let mut headers = HeaderMap::new();
-            if let Ok(value) = HeaderValue::from_str(ua) {
-                headers.insert(USER_AGENT, value);
+            if let Some(ua) = self.user_agent.as_deref() {
+                if let Ok(value) = HeaderValue::from_str(ua) {
+                    headers.insert(USER_AGENT, value);
+                }
             }
 
-            let builder = Client::builder()
+            let mut builder = Client::builder()
                 .timeout(std::time::Duration::from_secs(120))
                 .connect_timeout(std::time::Duration::from_secs(10))
                 .default_headers(headers);
-            let builder =
-                crate::config::apply_runtime_proxy_to_builder(builder, "provider.compatible");
+            builder = crate::config::apply_runtime_proxy_to_builder(builder, "provider.compatible");
+
+            if self.tls_insecure {
+                tracing::warn!(
+                    provider = %self.name,
+                    "TLS certificate verification is disabled for provider"
+                );
+                builder = builder.danger_accept_invalid_certs(true);
+            } else if let Some(cert_path) = self.tls_ca_cert_path.as_deref() {
+                let expanded = shellexpand::tilde(cert_path);
+                let cert_path = std::path::Path::new(expanded.as_ref());
+                match std::fs::read(cert_path) {
+                    Ok(cert_bytes) => match reqwest::Certificate::from_pem(&cert_bytes) {
+                        Ok(cert) => {
+                            builder = builder.add_root_certificate(cert);
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                provider = %self.name,
+                                cert_path = %cert_path.display(),
+                                "Failed to parse custom CA cert: {error}"
+                            );
+                        }
+                    },
+                    Err(error) => {
+                        tracing::warn!(
+                            provider = %self.name,
+                            cert_path = %cert_path.display(),
+                            "Failed to read custom CA cert file: {error}"
+                        );
+                    }
+                }
+            }
 
             return builder.build().unwrap_or_else(|error| {
-                tracing::warn!("Failed to build proxied timeout client with user-agent: {error}");
+                tracing::warn!(
+                    provider = %self.name,
+                    "Failed to build proxied timeout client: {error}"
+                );
                 Client::new()
             });
         }
@@ -2417,6 +2477,8 @@ mod tests {
             true,
             CompatibleApiMode::OpenAiResponses,
             Some(2048),
+            None,
+            false,
         );
 
         assert!(provider.should_use_responses_mode());

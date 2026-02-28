@@ -706,6 +706,8 @@ pub struct ProviderRuntimeOptions {
     pub custom_provider_api_mode: Option<CompatibleApiMode>,
     pub max_tokens_override: Option<u32>,
     pub model_support_vision: Option<bool>,
+    pub tls_ca_cert_path: Option<String>,
+    pub tls_insecure: bool,
 }
 
 impl Default for ProviderRuntimeOptions {
@@ -721,6 +723,8 @@ impl Default for ProviderRuntimeOptions {
             custom_provider_api_mode: None,
             max_tokens_override: None,
             model_support_vision: None,
+            tls_ca_cert_path: None,
+            tls_insecure: false,
         }
     }
 }
@@ -1400,6 +1404,8 @@ fn create_provider_with_url_and_options(
                 true,
                 api_mode,
                 options.max_tokens_override,
+                options.tls_ca_cert_path.as_deref(),
+                options.tls_insecure,
             )))
         }
 

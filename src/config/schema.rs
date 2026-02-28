@@ -413,6 +413,14 @@ pub struct ModelProviderConfig {
     /// If true, load OpenAI auth material (OPENAI_API_KEY or ~/.codex/auth.json).
     #[serde(default)]
     pub requires_openai_auth: bool,
+    /// Path to a custom CA certificate file (PEM format) for TLS verification.
+    /// Useful for custom inference endpoints using local PKI.
+    #[serde(default)]
+    pub tls_ca_cert_path: Option<String>,
+    /// If true, disable TLS certificate verification entirely.
+    /// WARNING: This is insecure and should only be used for testing.
+    #[serde(default)]
+    pub tls_insecure: bool,
 }
 
 /// Provider behavior overrides (`[provider]` section).
@@ -2633,6 +2641,60 @@ pub fn build_runtime_proxy_client_with_timeouts(
     });
     set_runtime_proxy_cached_client(cache_key, client.clone());
     client
+}
+
+/// Build an HTTP client with optional custom TLS configuration for a provider.
+pub fn build_provider_client_with_tls(
+    service_key: &str,
+    timeout_secs: u64,
+    connect_timeout_secs: u64,
+    tls_ca_cert_path: Option<&str>,
+    tls_insecure: bool,
+) -> reqwest::Client {
+    let builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .connect_timeout(std::time::Duration::from_secs(connect_timeout_secs));
+    let mut builder = apply_runtime_proxy_to_builder(builder, service_key);
+
+    if tls_insecure {
+        tracing::warn!(
+            service_key,
+            "TLS certificate verification is disabled. Use only in trusted environments."
+        );
+        builder = builder.danger_accept_invalid_certs(true);
+    } else if let Some(cert_path) = tls_ca_cert_path {
+        let expanded = shellexpand::tilde(cert_path);
+        let cert_path = std::path::Path::new(expanded.as_ref());
+        match std::fs::read(cert_path) {
+            Ok(cert_bytes) => match reqwest::Certificate::from_pem(&cert_bytes) {
+                Ok(cert) => {
+                    builder = builder.add_root_certificate(cert);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        service_key,
+                        cert_path = %cert_path.display(),
+                        "Failed to parse custom CA cert: {error}"
+                    );
+                }
+            },
+            Err(error) => {
+                tracing::warn!(
+                    service_key,
+                    cert_path = %cert_path.display(),
+                    "Failed to read custom CA cert file: {error}"
+                );
+            }
+        }
+    }
+
+    builder.build().unwrap_or_else(|error| {
+        tracing::warn!(
+            service_key,
+            "Failed to build TLS-configured client: {error}"
+        );
+        reqwest::Client::new()
+    })
 }
 
 fn parse_proxy_scope(raw: &str) -> Option<ProxyScope> {
@@ -7301,6 +7363,67 @@ impl Config {
         Self::normalize_provider_transport(self.provider.transport.as_deref(), "provider.transport")
     }
 
+    fn lookup_model_provider_profile_ref(
+        &self,
+        provider_name: &str,
+    ) -> Option<&ModelProviderConfig> {
+        let needle = provider_name.trim();
+        if needle.is_empty() {
+            return None;
+        }
+
+        self.model_providers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(needle))
+            .map(|(_, profile)| profile)
+    }
+
+    fn active_model_provider_profile_ref(&self) -> Option<&ModelProviderConfig> {
+        if let Some(default_provider) = self.default_provider.as_deref() {
+            if let Some(profile) = self.lookup_model_provider_profile_ref(default_provider) {
+                return Some(profile);
+            }
+        }
+
+        let Some(active_api_url) = self
+            .api_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return None;
+        };
+
+        self.model_providers.values().find(|profile| {
+            profile
+                .base_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_some_and(|base_url| {
+                    base_url.trim_end_matches('/') == active_api_url.trim_end_matches('/')
+                })
+        })
+    }
+
+    pub fn effective_provider_tls_ca_cert_path(&self) -> Option<String> {
+        self.active_model_provider_profile_ref()
+            .and_then(|profile| {
+                profile
+                    .tls_ca_cert_path
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToString::to_string)
+            })
+    }
+
+    pub fn effective_provider_tls_insecure(&self) -> bool {
+        self.active_model_provider_profile_ref()
+            .map(|profile| profile.tls_insecure)
+            .unwrap_or(false)
+    }
+
     fn lookup_model_provider_profile(
         &self,
         provider_name: &str,
@@ -11730,6 +11853,32 @@ provider_api = "not-a-real-mode"
     }
 
     #[test]
+    async fn provider_tls_settings_resolve_from_active_model_provider_profile() {
+        let mut config = Config {
+            default_provider: Some("sub2api".to_string()),
+            model_providers: HashMap::from([(
+                "sub2api".to_string(),
+                ModelProviderConfig {
+                    name: Some("sub2api".to_string()),
+                    base_url: Some("https://api.tonsof.blue/v1".to_string()),
+                    wire_api: None,
+                    requires_openai_auth: false,
+                    tls_ca_cert_path: Some("~/.zeroclaw/ca.crt".to_string()),
+                    tls_insecure: true,
+                },
+            )]),
+            ..Config::default()
+        };
+
+        config.apply_env_overrides();
+        assert_eq!(
+            config.effective_provider_tls_ca_cert_path().as_deref(),
+            Some("~/.zeroclaw/ca.crt")
+        );
+        assert!(config.effective_provider_tls_insecure());
+    }
+
+    #[test]
     async fn env_override_glm_api_key_for_regional_aliases() {
         let _env_guard = env_override_lock().await;
         let mut config = Config {
@@ -11844,6 +11993,8 @@ provider_api = "not-a-real-mode"
                     default_model: None,
                     api_key: None,
                     requires_openai_auth: false,
+                    tls_ca_cert_path: None,
+                    tls_insecure: false,
                 },
             )]),
             ..Config::default()
@@ -11874,6 +12025,8 @@ provider_api = "not-a-real-mode"
                     default_model: None,
                     api_key: None,
                     requires_openai_auth: true,
+                    tls_ca_cert_path: None,
+                    tls_insecure: false,
                 },
             )]),
             api_key: None,
@@ -11938,6 +12091,8 @@ provider_api = "not-a-real-mode"
                     default_model: None,
                     api_key: None,
                     requires_openai_auth: false,
+                    tls_ca_cert_path: None,
+                    tls_insecure: false,
                 },
             )]),
             ..Config::default()

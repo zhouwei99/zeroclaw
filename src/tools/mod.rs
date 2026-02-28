@@ -556,6 +556,8 @@ pub fn all_tools_with_runtime(
                 .map(|mode| mode.as_compatible_mode()),
             max_tokens_override: None,
             model_support_vision: root_config.model_support_vision,
+            tls_ca_cert_path: root_config.effective_provider_tls_ca_cert_path(),
+            tls_insecure: root_config.effective_provider_tls_insecure(),
         };
         let parent_tools = Arc::new(tool_arcs.clone());
         let mut delegate_tool = DelegateTool::new_with_options(

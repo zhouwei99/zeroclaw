@@ -2263,6 +2263,8 @@ pub async fn run(
         custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
         max_tokens_override: None,
         model_support_vision: config.model_support_vision,
+        tls_ca_cert_path: config.effective_provider_tls_ca_cert_path(),
+        tls_insecure: config.effective_provider_tls_insecure(),
     };
 
     let provider: Box<dyn Provider> = providers::create_routed_provider_with_options(
@@ -2870,6 +2872,8 @@ pub async fn process_message_with_session(
         custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
         max_tokens_override: None,
         model_support_vision: config.model_support_vision,
+        tls_ca_cert_path: config.effective_provider_tls_ca_cert_path(),
+        tls_insecure: config.effective_provider_tls_insecure(),
     };
     let provider: Box<dyn Provider> = providers::create_routed_provider_with_options(
         provider_name,

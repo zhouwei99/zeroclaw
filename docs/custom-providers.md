@@ -26,6 +26,26 @@ provider_api = "openai-responses"
 
 `provider_api` is only valid when `default_provider` uses `custom:<url>`.
 
+### Custom TLS Trust for Internal Endpoints
+
+For private gateways with internal PKI, configure a model provider profile and set TLS options there:
+
+```toml
+default_provider = "internal-gateway"
+default_model = "your-model-name"
+
+[model_providers.internal-gateway]
+name = "openai"
+base_url = "https://inference.internal.local/v1"
+tls_ca_cert_path = "~/.zeroclaw/ca.crt"
+# tls_insecure = true  # optional, insecure; testing-only
+```
+
+TLS options:
+
+- `tls_ca_cert_path`: Optional path to a PEM CA certificate file used as an additional trusted root for this provider endpoint.
+- `tls_insecure`: Optional boolean. If `true`, TLS certificate verification is disabled (unsafe, use only in trusted test environments).
+
 Responses API WebSocket mode is supported for OpenAI-compatible endpoints:
 
 - Auto mode: when your `custom:` endpoint resolves to `api.openai.com`, ZeroClaw will try WebSocket mode first (`wss://.../responses`) and automatically fall back to HTTP if the websocket handshake or stream fails.
