@@ -1901,7 +1901,7 @@ fn parse_proxy_enabled(raw: &str) -> Option<bool> {
 /// Persistent storage configuration (`[storage]` section).
 #[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 pub struct StorageConfig {
-    /// Storage provider settings (e.g. sqlite, postgres).
+    /// Storage provider settings (e.g. sqlite, postgres, mariadb).
     #[serde(default)]
     pub provider: StorageProviderSection,
 }
@@ -1914,10 +1914,10 @@ pub struct StorageProviderSection {
     pub config: StorageProviderConfig,
 }
 
-/// Storage provider backend configuration (e.g. postgres connection details).
+/// Storage provider backend configuration (e.g. postgres/mariadb connection details).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct StorageProviderConfig {
-    /// Storage engine key (e.g. "postgres", "sqlite").
+    /// Storage engine key (e.g. "postgres", "mariadb", "sqlite").
     #[serde(default)]
     pub provider: String,
 
@@ -1943,10 +1943,10 @@ pub struct StorageProviderConfig {
     #[serde(default)]
     pub connect_timeout_secs: Option<u64>,
 
-    /// Enable TLS for the PostgreSQL connection.
+    /// Enable TLS for SQL remote connections.
     ///
-    /// `true` — require TLS (skips certificate verification; suitable for
-    /// self-signed certs and most managed databases).
+    /// `true` — request TLS from the backend (and for PostgreSQL skips certificate
+    /// verification; suitable for self-signed certs and many managed databases).
     /// `false` (default) — plain TCP, backward-compatible.
     #[serde(default)]
     pub tls: bool,
@@ -2012,9 +2012,9 @@ impl Default for QdrantConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct MemoryConfig {
-    /// "sqlite" | "lucid" | "postgres" | "qdrant" | "markdown" | "none" (`none` = explicit no-op memory)
+    /// "sqlite" | "lucid" | "postgres" | "mariadb" | "qdrant" | "markdown" | "none" (`none` = explicit no-op memory)
     ///
-    /// `postgres` requires `[storage.provider.config]` with `db_url` (`dbURL` alias supported).
+    /// `postgres` / `mariadb` require `[storage.provider.config]` with `db_url` (`dbURL` alias supported).
     /// `qdrant` uses `[memory.qdrant]` config or `QDRANT_URL` env var.
     pub backend: String,
     /// Auto-save user-stated conversation input to memory (assistant output is excluded)

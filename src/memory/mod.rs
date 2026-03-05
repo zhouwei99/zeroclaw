@@ -4,6 +4,8 @@ pub mod cli;
 pub mod embeddings;
 pub mod hygiene;
 pub mod lucid;
+#[cfg(feature = "memory-mariadb")]
+pub mod mariadb;
 pub mod markdown;
 pub mod none;
 #[cfg(feature = "memory-postgres")]
@@ -21,6 +23,8 @@ pub use backend::{
     selectable_memory_backends, MemoryBackendKind, MemoryBackendProfile,
 };
 pub use lucid::LucidMemory;
+#[cfg(feature = "memory-mariadb")]
+pub use mariadb::MariadbMemory;
 pub use markdown::MarkdownMemory;
 pub use none::NoneMemory;
 #[cfg(feature = "memory-postgres")]
@@ -55,6 +59,9 @@ where
             Ok(Box::new(LucidMemory::new(workspace_dir, local)))
         }
         MemoryBackendKind::Postgres => postgres_builder(),
+        MemoryBackendKind::Mariadb => {
+            anyhow::bail!("memory backend 'mariadb' is not available in this build context")
+        }
         MemoryBackendKind::Qdrant | MemoryBackendKind::Markdown => {
             Ok(Box::new(MarkdownMemory::new(workspace_dir)))
         }
@@ -299,6 +306,40 @@ pub fn create_memory_with_storage_and_routes(
         );
     }
 
+    #[cfg(feature = "memory-mariadb")]
+    fn build_mariadb_memory(
+        storage_provider: Option<&StorageProviderConfig>,
+    ) -> anyhow::Result<Box<dyn Memory>> {
+        let storage_provider = storage_provider
+            .context("memory backend 'mariadb' requires [storage.provider.config] settings")?;
+        let db_url = storage_provider
+            .db_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .context(
+                "memory backend 'mariadb' requires [storage.provider.config].db_url (or dbURL)",
+            )?;
+
+        let memory = MariadbMemory::new(
+            db_url,
+            &storage_provider.schema,
+            &storage_provider.table,
+            storage_provider.connect_timeout_secs,
+            storage_provider.tls,
+        )?;
+        Ok(Box::new(memory))
+    }
+
+    #[cfg(not(feature = "memory-mariadb"))]
+    fn build_mariadb_memory(
+        _storage_provider: Option<&StorageProviderConfig>,
+    ) -> anyhow::Result<Box<dyn Memory>> {
+        anyhow::bail!(
+            "memory backend 'mariadb' requested but this build was compiled without `memory-mariadb`; rebuild with `--features memory-mariadb`"
+        );
+    }
+
     if matches!(backend_kind, MemoryBackendKind::Qdrant) {
         let url = config
             .qdrant
@@ -340,6 +381,10 @@ pub fn create_memory_with_storage_and_routes(
         )));
     }
 
+    if matches!(backend_kind, MemoryBackendKind::Mariadb) {
+        return build_mariadb_memory(storage_provider);
+    }
+
     create_memory_with_builders(
         &backend_name,
         workspace_dir,
@@ -361,10 +406,10 @@ pub fn create_memory_for_migration(
 
     if matches!(
         classify_memory_backend(backend),
-        MemoryBackendKind::Postgres
+        MemoryBackendKind::Postgres | MemoryBackendKind::Mariadb
     ) {
         anyhow::bail!(
-            "memory migration for backend 'postgres' is unsupported; migrate with sqlite or markdown first"
+            "memory migration for SQL backends ('postgres' / 'mariadb') is unsupported; migrate with sqlite or markdown first"
         );
     }
 
@@ -523,6 +568,30 @@ mod tests {
             assert!(error.to_string().contains("db_url"));
         } else {
             assert!(error.to_string().contains("memory-postgres"));
+        }
+    }
+
+    #[test]
+    fn factory_mariadb_without_db_url_is_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = MemoryConfig {
+            backend: "mariadb".into(),
+            ..MemoryConfig::default()
+        };
+
+        let storage = StorageProviderConfig {
+            provider: "mariadb".into(),
+            db_url: None,
+            ..StorageProviderConfig::default()
+        };
+
+        let error = create_memory_with_storage(&cfg, Some(&storage), tmp.path(), None)
+            .err()
+            .expect("mariadb without db_url should be rejected");
+        if cfg!(feature = "memory-mariadb") {
+            assert!(error.to_string().contains("db_url"));
+        } else {
+            assert!(error.to_string().contains("memory-mariadb"));
         }
     }
 
